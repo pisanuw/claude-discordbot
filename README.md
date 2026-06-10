@@ -1,5 +1,7 @@
 # Discord Claude Bot
 
+[![CI](https://github.com/pisanuw/claude-discordbot/actions/workflows/ci.yml/badge.svg)](https://github.com/pisanuw/claude-discordbot/actions/workflows/ci.yml)
+
 A Discord bot that lets server members chat with Claude AI. Supports slash commands, `@mention` triggering, per-user persistent conversation history, and required personal Anthropic and E2B keys for the features that use them.
 
 ---
@@ -116,7 +118,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Paste the output into `ENCRYPTION_KEY` in your `.env`.
 
-**Register slash commands** (required before the bot responds to `/ask` etc.):
+**Register slash commands** (required before the bot responds to `/claude-ask` etc.):
 
 ```bash
 node src/deploy-commands.js
@@ -130,9 +132,14 @@ npm start
 
 You should see:
 ```
-[bot] Loaded command: /ask
+[bot] Loaded command: /claude-ask
+[bot] Loaded command: /claude-e2bkey
+[bot] Loaded command: /claude-github-setup
+[bot] Loaded command: /claude-help
+[bot] Loaded command: /claude-mykey
 [bot] Loaded command: /claude-reset
-[bot] Loaded command: /mykey
+[bot] Loaded command: /claude-review
+[bot] Loaded command: /claude-run
 [bot] Registered event: ready (once)
 [bot] Registered event: messageCreate
 [bot] Registered event: interactionCreate
@@ -238,13 +245,13 @@ node src/deploy-commands.js
 
 ## 7. User Guide — Commands & Usage
 
-### `/ask <prompt>`
+### `/claude-ask <prompt>`
 
 Ask Claude a question or start a conversation.
 
 ```
-/ask What is the difference between TCP and UDP?
-/ask Can you help me debug this Python function?
+/claude-ask What is the difference between TCP and UDP?
+/claude-ask Can you help me debug this Python function?
 ```
 
 Claude remembers your conversation history across all servers and sessions — it's global to your Discord user ID. Use `/claude-reset` to start fresh.
@@ -253,7 +260,7 @@ Claude remembers your conversation history across all servers and sessions — i
 
 ### `@BotName <message>`
 
-Mention the bot directly in any channel it has access to. Works the same as `/ask`.
+Mention the bot directly in any channel it has access to. Works the same as `/claude-ask`.
 
 ```
 @Claude Bot What are some good ways to learn Rust?
@@ -321,7 +328,7 @@ Register your own E2B API key. This is required before you can use `/claude-run`
 ---
 
 
-### `/review <url> [focus]`
+### `/claude-review <url> [focus]`
 
 Submit a public GitHub repository for an AI code review. Claude fetches the source files, analyses them, and returns:
 
@@ -331,8 +338,8 @@ Submit a public GitHub repository for an AI code review. Claude fetches the sour
 **Examples:**
 
 ```
-/review url:https://github.com/student/assignment1
-/review url:https://github.com/student/project focus:Python style and error handling
+/claude-review url:https://github.com/student/assignment1
+/claude-review url:https://github.com/student/project focus:Python style and error handling
 ```
 
 **Applying the patch:**
@@ -343,6 +350,31 @@ git apply --check changes.patch  # preview without applying
 ```
 
 **Limits:** up to 40 files, ~80k characters total. Binary files, node_modules, dist, and .git are excluded automatically. Private repos require GITHUB_TOKEN.
+
+---
+
+### `/claude-run <url> [focus]`
+
+Fetch a GitHub repo, run its test suite in an isolated E2B sandbox, and if tests fail, let Claude analyse the output, apply fixes, and retry — up to 3 iterations. Returns a written review and a `changes.patch` diff.
+
+Requires your E2B key (`/claude-e2bkey set`). Supports Python (pytest), Node.js (npm test), Java Maven, and Makefile projects.
+
+```
+/claude-run url:https://github.com/student/assignment1
+/claude-run url:https://github.com/student/project focus:fix failing unit tests only
+```
+
+---
+
+### `/claude-help`
+
+Lists all commands and usage instructions in a private reply.
+
+---
+
+### `/claude-github-setup`
+
+Posts instructions and YAML templates for adding GitHub Actions CI to a student repo, so that automated test runs appear in the GitHub Actions tab.
 
 ---
 
@@ -358,20 +390,29 @@ git apply --check changes.patch  # preview without applying
 
 ```
 src/
-├── index.js              Entry point — loads commands/events, starts client
-├── deploy-commands.js    One-time script to register slash commands with Discord API
+├── index.js                     Entry point — loads commands/events, starts client
+├── deploy-commands.js           One-time script to register slash commands with Discord API
 ├── commands/
-│   ├── ask.js            /ask slash command
-│   ├── reset.js          /claude-reset slash command
-│   └── mykey.js          /mykey set|clear|status + modal definition
+│   ├── ask.js                   /claude-ask slash command
+│   ├── e2bkey.js                /claude-e2bkey set|clear|status + modal definition
+│   ├── github-setup.js          /claude-github-setup CI template guide
+│   ├── help.js                  /claude-help command list
+│   ├── mykey.js                 /claude-mykey set|clear|status + modal definition
+│   ├── reset.js                 /claude-reset slash command
+│   ├── review.js                /claude-review slash command
+│   └── run.js                   /claude-run slash command (agentic test+fix loop)
 ├── events/
-│   ├── ready.js          Fires once on login
-│   ├── messageCreate.js  @mention trigger with cooldown
-│   └── interactionCreate.js  Routes slash commands + handles modal submission
+│   ├── ready.js                 Fires once on login
+│   ├── messageCreate.js         @mention trigger with cooldown
+│   └── interactionCreate.js     Routes slash commands + handles modal submission
 └── lib/
-    ├── claude.js         Anthropic SDK wrapper — streaming chat
-    ├── db.js             SQLite layer — history + encrypted user keys
-    └── handler.js        Shared query logic used by both triggers
+    ├── claude.js                Anthropic SDK wrapper — streaming chat
+    ├── db.js                    SQLite layer — history + encrypted user keys
+    ├── e2b.js                   E2B sandbox wrapper — runs code in isolation
+    ├── github.js                GitHub repo fetcher (public REST API)
+    ├── handler.js               Shared query logic used by both triggers
+    ├── iterate.js               Agentic fix loop — Claude analyses failures, patches, retries
+    └── reviewer.js              AI code review prompt builder and response parser
 ```
 
 **Conversation storage:** SQLite with WAL mode. History is keyed by Discord `user_id` only (global, not guild-scoped). The last 40 messages are sent to Claude on each request.
@@ -404,8 +445,8 @@ src/
 **Bot can't read @mention messages**
 - Confirm **Message Content Intent** is enabled in the Discord Developer Portal → Bot page
 
-**`[db] WARNING: ENCRYPTION_KEY not set`**
-- Generate a key and add it to your env vars (see §3)
+**`[db] ENCRYPTION_KEY is not set`**
+- The bot will exit immediately if this variable is missing. Generate a key and add it to your env vars (see §3)
 
 **User keys not persisting after redeploy on Railway**
 - Ensure the volume is mounted at `/data` and `DB_PATH=/data/bot.db` is set

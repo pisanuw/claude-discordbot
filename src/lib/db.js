@@ -4,14 +4,12 @@ const path = require('path');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../bot.db');
 
-const ENCRYPTION_KEY = Buffer.from(
-  process.env.ENCRYPTION_KEY || '0'.repeat(64),
-  'hex'
-);
-
 if (!process.env.ENCRYPTION_KEY) {
-  console.warn('[db] WARNING: ENCRYPTION_KEY not set. User API keys will not be stored securely.');
+  console.error('[db] ENCRYPTION_KEY is not set. Cannot start safely — user API keys would be encrypted with a known fallback key.');
+  process.exit(1);
 }
+
+const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');

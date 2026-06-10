@@ -1,5 +1,10 @@
 node_modules/
 .env
+.env.*
+!.env.example
 *.db
 *.db-shm
 *.db-wal
+npm-debug.log*
+AI-log.md
+.DS_Store

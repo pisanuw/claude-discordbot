@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Enforce Conventional Commits: type(scope)?: subject
+MSG=$(cat "$1")
+PATTERN='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,100}'
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+  echo "ERROR: Commit message must follow Conventional Commits format."
+  echo "  Examples: feat: add /claude-run command"
+  echo "            fix(db): fail closed when ENCRYPTION_KEY is missing"
+  echo "            chore: add eslint config"
+  exit 1
+fi
