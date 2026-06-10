@@ -1,6 +1,6 @@
 const Database = require('better-sqlite3');
-const crypto = require('crypto');
 const path = require('path');
+const { encrypt: _encrypt, decrypt: _decrypt } = require('./crypto-helpers');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../bot.db');
 
@@ -11,6 +11,10 @@ if (!process.env.ENCRYPTION_KEY) {
 
 const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
 
+// Partially apply the server key so the rest of the file uses a stable 2-arg interface.
+const encrypt = (plaintext) => _encrypt(ENCRYPTION_KEY, plaintext);
+const decrypt = (enc, iv, tag) => _decrypt(ENCRYPTION_KEY, enc, iv, tag);
+
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
@@ -20,6 +24,8 @@ db.exec(`
     user_id    TEXT    NOT NULL,
     role       TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
     content    TEXT    NOT NULL,
+    iv         TEXT,
+    auth_tag   TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, created_at);
@@ -41,30 +47,13 @@ db.exec(`
   );
 `);
 
-// ── Encryption helpers ───────────────────────────────────────────────────────
-
-function encrypt(plaintext) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    encrypted: encrypted.toString('hex'),
-    iv: iv.toString('hex'),
-    authTag: cipher.getAuthTag().toString('hex'),
-  };
-}
-
-function decrypt(encryptedHex, ivHex, authTagHex) {
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    ENCRYPTION_KEY,
-    Buffer.from(ivHex, 'hex')
-  );
-  decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(encryptedHex, 'hex')),
-    decipher.final(),
-  ]).toString('utf8');
+// Migration: add iv/auth_tag to messages for at-rest encryption if upgrading from
+// an older schema that didn't have those columns.
+try {
+  db.exec('ALTER TABLE messages ADD COLUMN iv TEXT');
+  db.exec('ALTER TABLE messages ADD COLUMN auth_tag TEXT');
+} catch {
+  // columns already exist — no-op
 }
 
 // ── Generic encrypted key helpers ────────────────────────────────────────────
@@ -103,16 +92,20 @@ function hasKey(table, userId) {
 
 function getHistory(userId, limit = 40) {
   return db
-    .prepare(
-      `SELECT role, content FROM messages
-       WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`
-    )
+    .prepare(`SELECT role, content, iv, auth_tag FROM messages WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`)
     .all(userId, limit)
-    .reverse();
+    .reverse()
+    .map((row) => ({
+      role: row.role,
+      // iv is null for messages written before encryption was added — return as-is.
+      content: row.iv ? decrypt(row.content, row.iv, row.auth_tag) : row.content,
+    }));
 }
 
 function appendMessage(userId, role, content) {
-  db.prepare(`INSERT INTO messages (user_id, role, content) VALUES (?, ?, ?)`).run(userId, role, content);
+  const { encrypted, iv, authTag } = encrypt(content);
+  db.prepare(`INSERT INTO messages (user_id, role, content, iv, auth_tag) VALUES (?, ?, ?, ?, ?)`)
+    .run(userId, role, encrypted, iv, authTag);
 }
 
 function clearHistory(userId) {

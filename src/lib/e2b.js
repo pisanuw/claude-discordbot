@@ -13,16 +13,20 @@ function detectRunStrategy(files) {
   const has = (name) => paths.some((p) => p === name || p.endsWith('/' + name));
 
   // Python
+  // Run pytest; if it exits 5 (no tests collected) and main.py exists, run main.py instead.
+  // Using explicit exit-code check avoids the || / && precedence trap where main.py
+  // would run unconditionally after a successful echo.
+  const PYTHON_TEST = 'python -m pytest --tb=short -v 2>&1; _rc=$?; if [ $_rc -eq 5 ] && [ -f main.py ]; then python main.py 2>&1; else (exit $_rc); fi';
   if (has('requirements.txt') && paths.some((p) => p.endsWith('.py'))) {
     return {
       install: 'pip install -r requirements.txt -q',
-      test: 'python -m pytest --tb=short -v 2>&1 || python -m pytest --tb=short 2>&1 || echo "No pytest tests found — running main.py" && python main.py 2>&1',
+      test: PYTHON_TEST,
     };
   }
   if (paths.some((p) => p.endsWith('.py'))) {
     return {
       install: null,
-      test: 'python -m pytest --tb=short -v 2>&1 || python main.py 2>&1',
+      test: PYTHON_TEST,
     };
   }
 
