@@ -9,7 +9,7 @@ module.exports = [
       globals: { ...globals.node },
     },
     rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-undef': 'error',
     },
   },

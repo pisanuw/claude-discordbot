@@ -11,6 +11,19 @@ if (!process.env.ENCRYPTION_KEY) {
 
 const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
 
+// Buffer.from(..., 'hex') silently drops invalid/odd characters, so a malformed
+// key would otherwise sail past the missing-key check above and only blow up with
+// an opaque "Invalid key length" the first time someone runs a command. Fail
+// closed here instead, with a message that says how to generate a correct key.
+if (ENCRYPTION_KEY.length !== 32) {
+  console.error(
+    `[db] ENCRYPTION_KEY must be 64 hex characters (32 bytes) for AES-256-GCM; ` +
+    `got ${process.env.ENCRYPTION_KEY.length} characters decoding to ${ENCRYPTION_KEY.length} bytes. ` +
+    `Generate one with: openssl rand -hex 32`
+  );
+  process.exit(1);
+}
+
 // Partially apply the server key so the rest of the file uses a stable 2-arg interface.
 const encrypt = (plaintext) => _encrypt(ENCRYPTION_KEY, plaintext);
 const decrypt = (enc, iv, tag) => _decrypt(ENCRYPTION_KEY, enc, iv, tag);
@@ -52,8 +65,11 @@ db.exec(`
 try {
   db.exec('ALTER TABLE messages ADD COLUMN iv TEXT');
   db.exec('ALTER TABLE messages ADD COLUMN auth_tag TEXT');
-} catch {
-  // columns already exist — no-op
+} catch (err) {
+  // The columns already existing (the normal case, since CREATE TABLE above
+  // declares them) is benign. Anything else — a locked database, a disk error —
+  // is a real startup failure and must not be swallowed.
+  if (!/duplicate column name/i.test(err.message)) throw err;
 }
 
 // ── Generic encrypted key helpers ────────────────────────────────────────────
@@ -91,15 +107,27 @@ function hasKey(table, userId) {
 // ── Conversation history ─────────────────────────────────────────────────────
 
 function getHistory(userId, limit = 40) {
-  return db
+  const rows = db
     .prepare(`SELECT role, content, iv, auth_tag FROM messages WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`)
     .all(userId, limit)
-    .reverse()
-    .map((row) => ({
-      role: row.role,
-      // iv is null for messages written before encryption was added — return as-is.
-      content: row.iv ? decrypt(row.content, row.iv, row.auth_tag) : row.content,
-    }));
+    .reverse();
+
+  const history = [];
+  for (const row of rows) {
+    // iv is null for messages written before encryption was added — return as-is.
+    if (!row.iv) {
+      history.push({ role: row.role, content: row.content });
+      continue;
+    }
+    try {
+      history.push({ role: row.role, content: decrypt(row.content, row.iv, row.auth_tag) });
+    } catch {
+      // Undecryptable row (e.g. ENCRYPTION_KEY was rotated). Skip it rather than
+      // throwing, which would crash the whole /ask flow on the user's next message.
+      // getKey() already fails soft the same way for stored API keys.
+    }
+  }
+  return history;
 }
 
 function appendMessage(userId, role, content) {

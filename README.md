@@ -192,7 +192,7 @@ Optional:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Or `claude-opus-4-6` for the most capable model |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Or `claude-opus-4-8` for the most capable model |
 | `MAX_TOKENS` | `2048` | Max tokens per Claude response |
 
 ### 4e. Trigger a redeploy

@@ -48,10 +48,8 @@ async function handleQuery(userId, prompt, editReply, followUp) {
 
   // Live-edit the placeholder while tokens stream in
   let lastEditTime = Date.now();
-  let latestText = '';
 
   const onChunk = (accumulated) => {
-    latestText = accumulated;
     const now = Date.now();
     if (now - lastEditTime >= EDIT_INTERVAL_MS) {
       lastEditTime = now;

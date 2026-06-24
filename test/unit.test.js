@@ -2,12 +2,32 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { parseGithubUrl } = require('../src/lib/github');
 const { detectRunStrategy, applyPatches } = require('../src/lib/e2b');
 const { encrypt, decrypt } = require('../src/lib/crypto-helpers');
 
 const TEST_KEY = Buffer.alloc(32, 0x42); // deterministic 32-byte key for tests
+
+const DB_MODULE = path.resolve(__dirname, '../src/lib/db.js');
+
+// Run src/lib/db.js in a fresh process with a controlled environment. db.js reads
+// ENCRYPTION_KEY/DB_PATH at require time and may call process.exit(1), so it has to
+// be exercised out-of-process to be testable.
+function runDb(script, envOverrides) {
+  const env = { ...process.env, ...envOverrides };
+  for (const [k, v] of Object.entries(envOverrides)) {
+    if (v === undefined) delete env[k];
+  }
+  return spawnSync(process.execPath, ['-e', script], {
+    env,
+    encoding: 'utf8',
+  });
+}
 
 // ── parseGithubUrl ────────────────────────────────────────────────────────────
 
@@ -142,4 +162,78 @@ test('decrypt: tampered ciphertext throws (integrity check)', () => {
   const { encrypted, iv, authTag } = encrypt(TEST_KEY, 'sensitive data');
   const tampered = (parseInt(encrypted[0], 16) ^ 1).toString(16) + encrypted.slice(1);
   assert.throws(() => decrypt(TEST_KEY, tampered, iv, authTag));
+});
+
+test('decrypt: a different key cannot read old ciphertext (key rotation)', () => {
+  // This is the failure mode getHistory now guards against: rotate ENCRYPTION_KEY
+  // and every previously-stored row becomes undecryptable.
+  const otherKey = Buffer.alloc(32, 0x37);
+  const { encrypted, iv, authTag } = encrypt(TEST_KEY, 'previously stored message');
+  assert.throws(() => decrypt(otherKey, encrypted, iv, authTag));
+});
+
+// ── db.js: fail-closed ENCRYPTION_KEY validation ──────────────────────────────
+
+const KEY_A = Buffer.alloc(32, 0x42).toString('hex'); // 64 hex chars
+const KEY_B = Buffer.alloc(32, 0x37).toString('hex'); // different valid key
+
+test('db: refuses to start when ENCRYPTION_KEY is missing', () => {
+  const r = runDb(`require(${JSON.stringify(DB_MODULE)})`, {
+    ENCRYPTION_KEY: undefined,
+    DB_PATH: ':memory:',
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ENCRYPTION_KEY is not set/);
+});
+
+test('db: refuses to start when ENCRYPTION_KEY is the wrong length', () => {
+  const r = runDb(`require(${JSON.stringify(DB_MODULE)})`, {
+    ENCRYPTION_KEY: 'abcd', // valid hex but only 2 bytes, not 32
+    DB_PATH: ':memory:',
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ENCRYPTION_KEY must be 64 hex characters/);
+});
+
+test('db: starts with a correct 64-hex-char ENCRYPTION_KEY', () => {
+  const r = runDb(`require(${JSON.stringify(DB_MODULE)})`, {
+    ENCRYPTION_KEY: KEY_A,
+    DB_PATH: ':memory:',
+  });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+// ── db.js: getHistory is fail-soft across a key rotation ──────────────────────
+
+test('getHistory: skips undecryptable rows after a key rotation instead of crashing', () => {
+  const dbFile = path.join(os.tmpdir(), `dcbot-test-${process.pid}-${Date.now()}.db`);
+  const cleanup = () => {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.rmSync(dbFile + suffix); } catch { /* may not exist */ }
+    }
+  };
+
+  try {
+    // Write a message under KEY_A and confirm it reads back decrypted.
+    const write = runDb(
+      `const db=require(${JSON.stringify(DB_MODULE)});` +
+      `db.appendMessage('u1','user','secret hello');` +
+      `process.stdout.write(JSON.stringify(db.getHistory('u1')));`,
+      { ENCRYPTION_KEY: KEY_A, DB_PATH: dbFile }
+    );
+    assert.equal(write.status, 0, write.stderr);
+    assert.deepEqual(JSON.parse(write.stdout), [{ role: 'user', content: 'secret hello' }]);
+
+    // Re-open the same database with a rotated key. The stored row can no longer be
+    // decrypted; getHistory must return [] without throwing (the old bug crashed /ask).
+    const read = runDb(
+      `const db=require(${JSON.stringify(DB_MODULE)});` +
+      `process.stdout.write(JSON.stringify(db.getHistory('u1')));`,
+      { ENCRYPTION_KEY: KEY_B, DB_PATH: dbFile }
+    );
+    assert.equal(read.status, 0, read.stderr);
+    assert.deepEqual(JSON.parse(read.stdout), []);
+  } finally {
+    cleanup();
+  }
 });

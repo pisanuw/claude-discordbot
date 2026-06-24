@@ -8,3 +8,11 @@ node_modules/
 npm-debug.log*
 AI-log.md
 .DS_Store
+
+# Encrypted secret blobs — never track, even GPG-encrypted
+*.asc
+*.gpg
+
+# Local working/journal files — keep out of the public repo
+BRIEFING.md
+CHANGES.md

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 
 // ── Public summary posted in channel ────────────────────────────────────────
 const CHANNEL_SUMMARY = `## 🔧 GitHub Actions Setup
